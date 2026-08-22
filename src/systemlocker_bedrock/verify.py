@@ -142,6 +142,7 @@ def parse_payload(config: Config, json_text: str, expected_challenge: str, now: 
     response.license_key_hash = optional_string("license_key_hash")
     response.username_hash = optional_string("username_hash")
     response.termination_message = optional_string("termination_message")
+    response.sso_url = optional_string("sso_url")
     response.invisible_folder_token = optional_string("invisible_folder_token")
 
     variables = payload.get("variables")

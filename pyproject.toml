@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "systemlocker-bedrock"
-version = "0.1.0"
+version = "0.1.1"
 description = "Official System Locker Bedrock client for Python — Ed25519-signed responses, rotating session tokens, and per-request challenges for software on untrusted machines."
 readme = "README.md"
 requires-python = ">=3.10"

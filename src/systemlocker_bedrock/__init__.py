@@ -11,6 +11,7 @@ from .config import Config, default_config, validate_config
 from .errors import BedrockError, ErrorKind
 from .response import RESPONSE_CODES, Response
 from .session import BedrockSession, HeartbeatFailure
+from .sso import GOOGLE_SSO_PORTAL, begin_google_sso, google_sso_url, open_url
 from .transport import HTTPClient, HTTPResponse
 from .verify import (
     generate_challenge,
@@ -19,7 +20,7 @@ from .verify import (
     verify_signed_response,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "AuthenticationResult",
@@ -28,13 +29,17 @@ __all__ = [
     "Client",
     "Config",
     "ErrorKind",
+    "GOOGLE_SSO_PORTAL",
     "HTTPClient",
     "HTTPResponse",
     "HeartbeatFailure",
     "RESPONSE_CODES",
     "Response",
+    "begin_google_sso",
     "default_config",
     "generate_challenge",
+    "google_sso_url",
+    "open_url",
     "parse_unsigned_revocation",
     "sha256_hex",
     "validate_config",

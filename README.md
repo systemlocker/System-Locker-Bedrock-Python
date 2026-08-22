@@ -82,6 +82,29 @@ if result.downloaded:
 `download_if_new` (revision-checked) are available. Tokens live in memory
 only and clear on `shutdown()`.
 
+## Google SSO (account authentication)
+
+Accounts created through Google sign-in have no local password on the
+server. A `username`/`password` authentication for such an account is
+answered with a signed `GOOGLE_SSO_REQUIRED` denial whose payload carries
+`sso_url` — the portal where the user completes Google sign-in and receives
+a system-specific password (valid 180 days) to use as their account
+password. There is no callback; the user transcribes the generated password
+into your login form and you simply retry.
+
+```python
+result = client.authenticate_with_password(username, password)
+if result.response.code == "GOOGLE_SSO_REQUIRED":
+    # The denial's URL is authoritative; open it in the default browser.
+    portal = result.response.sso_url or client.google_sso_url()
+    if not open_url(portal):
+        print(f"Finish Google sign-in at: {portal}")  # headless fallback
+```
+
+You can also start the flow before any denial: `client.begin_google_sso()`
+(or `begin_google_sso(system_id)`) opens the portal and returns an
+`(url, opened)` tuple.
+
 ## Device identifiers (HWID)
 
 The library derives a hardware ID by default; set `config.hwid = "1"` only to

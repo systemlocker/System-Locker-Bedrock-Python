@@ -5,7 +5,8 @@ from __future__ import annotations
 RESPONSE_CODES = frozenset(
     {
         "OK", "OUTDATED", "MISSING_FIELD", "INVALID_REQUEST", "INVALID_SYSTEM",
-        "INVALID_CREDENTIALS", "USER_NOT_VERIFIED", "INVALID_KEY", "KEY_FROZEN",
+        "INVALID_CREDENTIALS", "GOOGLE_SSO_REQUIRED", "USER_NOT_VERIFIED",
+        "INVALID_KEY", "KEY_FROZEN",
         "HWID_BANNED", "HWID_MISMATCH", "SPOOF_SUSPECTED", "SYSTEM_PAUSED",
         "PLAN_INACTIVE", "PRODUCTION_AUTH_UNAVAILABLE", "USER_LIMIT_REACHED",
         "EXPIRED_KEY", "PROGRAM_DIGEST_MISMATCH", "INVALID_BEATRATE",
@@ -47,7 +48,7 @@ class Response:
         "code", "human_response", "is_error", "is_failure", "authed",
         "protocol_version", "key_id", "system", "challenge", "server_time", "human_time",
         "session_token", "license_key_hash", "username_hash",
-        "termination_message", "invisible_folder_token", "variables",
+        "termination_message", "sso_url", "invisible_folder_token", "variables",
     )
 
     def __init__(self) -> None:
@@ -66,6 +67,8 @@ class Response:
         self.license_key_hash: str | None = None
         self.username_hash: str | None = None
         self.termination_message: str | None = None
+        #: Google SSO portal URL, on GOOGLE_SSO_REQUIRED denials
+        self.sso_url: str | None = None
         self.invisible_folder_token: str | None = None
         #: variable name -> value, or None when the server reports it absent
         self.variables: dict[str, str | None] = {}

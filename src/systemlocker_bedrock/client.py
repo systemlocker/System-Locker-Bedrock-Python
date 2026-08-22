@@ -10,6 +10,7 @@ from .errors import BedrockError, ErrorKind
 from .invisible_folder import InvisibleFolder
 from .response import Response
 from .session import BedrockSession, HeartbeatFailure
+from .sso import begin_google_sso, google_sso_url
 from .transport import HTTPClient
 from .verify import generate_challenge, parse_unsigned_revocation, sha256_hex, verify_signed_response
 
@@ -75,6 +76,20 @@ class Client:
 
     def authenticate_with_password(self, username: str, password: str, *, request_invisible_folder_token: bool = False, variables: list[str] | None = None) -> AuthenticationResult:
         return self._authenticate({"username": username, "password": password}, username, False, request_invisible_folder_token, variables)
+
+    # ── Google SSO ────────────────────────────────────────────────
+
+    def google_sso_url(self) -> str:
+        """Return the Google SSO portal URL for the configured system."""
+        return google_sso_url(self.config.system_id)
+
+    def begin_google_sso(self) -> tuple[str, bool]:
+        """Open the Google SSO portal for the configured system.
+
+        See :func:`systemlocker_bedrock.sso.begin_google_sso` for the
+        ``(url, opened)`` result contract.
+        """
+        return begin_google_sso(self.config.system_id)
 
     def _authenticate(self, extra_fields: dict[str, str], identity: str, key_authentication: bool, request_if_token: bool, variables: list[str] | None) -> AuthenticationResult:
         challenge = generate_challenge()
