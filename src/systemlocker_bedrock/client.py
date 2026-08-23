@@ -36,7 +36,7 @@ class Client:
 
     def __init__(self, config: Config | None = None, http: HTTPClient | None = None, now: Callable[[], float] | None = None) -> None:
         self.config = config or default_config()
-        if not self.config.hwid:
+        if not self.config.hwid and self.config.hwid_mode != "sl-hwid":
             try:
                 from .hwid import device_hwid
                 self.config.hwid = device_hwid()
@@ -52,6 +52,7 @@ class Client:
         self._failure_hook: Callable[[HeartbeatFailure], None] | None = None
         self._state_lock = threading.Lock()
         self._invisible_folder = InvisibleFolder(self)
+        self._ss_sessions: dict[str, object] = {}
 
     # ── plumbing ───────────────────────────────────────────────────
 
@@ -91,12 +92,38 @@ class Client:
         """
         return begin_google_sso(self.config.system_id)
 
+    def _prepare_secret_sharing(self, identity: str):
+        """Recovers the shared device HWID; sessions remain cached per identity."""
+        with self._state_lock:
+            cached = self._ss_sessions.get(identity)
+            if cached is not None:
+                return cached
+        from .slhwid import Options, prepare as ss_prepare
+
+        try:
+            session = ss_prepare(
+                Options(
+                    store_path=self.config.sl_hwid_store,
+                    extra_mandatory=self.config.sl_hwid_extra_mandatory or [],
+                )
+            )
+        except Exception as error:
+            raise BedrockError(ErrorKind.LOCAL_FAILURE, f"Secret-sharing HWID unavailable: {error}") from error
+        with self._state_lock:
+            self._ss_sessions[identity] = session
+        return session
+
     def _authenticate(self, extra_fields: dict[str, str], identity: str, key_authentication: bool, request_if_token: bool, variables: list[str] | None) -> AuthenticationResult:
         challenge = generate_challenge()
+        hwid_value = self.config.hwid
+        ss_session = None
+        if not hwid_value:  # secret_sharing mode: recover or enroll at auth time
+            ss_session = self._prepare_secret_sharing(identity)
+            hwid_value = ss_session.hwid
         form: dict[str, object] = {
             **extra_fields,
             "system": self.config.system_id,
-            "hwid": self.config.hwid,
+            "hwid": hwid_value,
             "version": self.config.version,
             "beatrate": str(int(self.config.beat_rate_seconds)),
             "challenge": challenge,
@@ -139,6 +166,12 @@ class Client:
         response_hash = response.license_key_hash if key_authentication else response.username_hash
         if response_hash != identity_hash:
             raise BedrockError(ErrorKind.INVALID_PAYLOAD, "Bedrock response identity hash does not match the authentication request.")
+
+        # The server accepted this identity on this device: re-center the
+        # secret-sharing shares on the hardware observed this launch.
+        # Failures are non-fatal — the next launch re-derives.
+        if ss_session is not None:
+            ss_session.commit()
 
         with self._state_lock:
             previous = self._session

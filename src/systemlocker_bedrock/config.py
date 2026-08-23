@@ -20,12 +20,15 @@ class Config:
     system_id: str = ""
     version: str = "bypass"
     hwid: str = ""
+    hwid_mode: str = "sl-hwid"
+    sl_hwid_store: str = ""
+    sl_hwid_extra_mandatory: list[str] | None = None
     beat_rate_seconds: float = 30.0
     request_timeout_seconds: float = 15.0
     max_server_clock_skew_seconds: int = 120
     base_url: str = "https://systemlocker.net"
     invisible_folder_base_url: str = "https://invisiblefolder.net"
-    user_agent: str = "systemlocker-bedrock-python/0.1"
+    user_agent: str = "systemlocker-bedrock-python/1.0"
     program_digest: str | None = None
     signing_key_id: str | None = None
     invisible_folder_api_key: str | None = None
@@ -40,6 +43,8 @@ def default_config() -> Config:
 
 def validate_config(config: Config) -> None:
     """Raises a Configuration error on the first violation."""
+    if config.hwid_mode not in ("legacy", "sl-hwid"):
+        raise BedrockError(ErrorKind.CONFIGURATION, 'HWID mode must be "legacy" or "sl-hwid".')
     if not _SYSTEM_ID_PATTERN.match(config.system_id or ""):
         raise BedrockError(
             ErrorKind.CONFIGURATION,
