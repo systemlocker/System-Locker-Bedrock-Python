@@ -130,6 +130,9 @@ re-absorbed after each successful authentication. The point is to prevent
 over-fitting to any single machine detail while avoiding over-dependence
 on the exact hardware configuration.
 
+Existing pre-v2 HWIDs remain recoverable with their stored schema and
+threshold; they migrate to the current schema after a successful commit.
+
 Keep the pre-1.0 behavior with `hwid_mode = "legacy"`. A custom `hwid` value (or "1" to
 disable device locking entirely) still wins over both modes.
 
@@ -144,9 +147,13 @@ The HWID determination is deliberately best-effort, but it is expected to
 match runs of the same application, and, in most cases, across any
 application run on the same device and operating system.
 
-Storage lives in the Windows registry (`HKLM\SOFTWARE\SystemLocker`, with
-an HKCU fallback) and a per-user directory elsewhere. One factor — the
-module's own persisted value — is hard-locked: changing or deleting it
+On Windows, default state is stored in the registry
+(`HKLM\SOFTWARE\SystemLocker`, falling back to HKCU when needed); the lock
+marker uses `%LOCALAPPDATA%\SystemLocker`. On macOS, state is stored under
+`~/Library/Application Support/SystemLocker`. On Linux, it uses
+`$XDG_DATA_HOME/systemlocker` or `~/.local/share/systemlocker`. An explicit
+`sl_hwid_store` redirects state to a directory on every platform. One factor
+— the module's own persisted value — is hard-locked: changing or deleting it
 always requires re-activation, since that is tampering rather than drift.
 Name additional hard-locked factors with `sl_hwid_extra_mandatory` (for example
 `machine_guid`).

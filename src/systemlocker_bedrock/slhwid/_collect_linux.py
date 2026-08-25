@@ -5,6 +5,7 @@ DRM EDID files."""
 from __future__ import annotations
 
 import glob
+import hashlib
 import os
 import re
 import subprocess
@@ -17,6 +18,22 @@ def _run(command: list[str]) -> str:
     except (OSError, subprocess.SubprocessError):
         return ""
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _read(path: str, binary: bool = False):
+    try:
+        if binary:
+            with open(path, "rb") as source:
+                return source.read()
+        with open(path, encoding="utf-8", errors="replace") as source:
+            value = source.read()
+    except OSError:
+        return b"" if binary else ""
+    return value.strip()
+
+
+def _multi_instance(values: list[str]) -> str:
+    return "|".join(sorted(value for value in values if value))
 
 
 def collect() -> dict[str, str]:
@@ -50,8 +67,41 @@ def collect() -> dict[str, str]:
             value = open(path, encoding="ascii", errors="replace").read().strip()
         except OSError:
             continue
-        if value:
+        if value and slot not in factors:
             factors[slot] = value
+
+    # Schema-v2 raw signals. The legacy factor names collected above remain
+    # untouched because a v1 helper must be recovered from its original view.
+    for slot, path in (
+        ("system_uuid", "/sys/class/dmi/id/product_uuid"),
+        ("system_serial", "/sys/class/dmi/id/product_serial"),
+        ("chassis_serial", "/sys/class/dmi/id/chassis_serial"),
+    ):
+        if value := _read(path):
+            factors[slot] = value
+
+    if serials := re.findall(r"(?mi)^\s*Serial Number:\s*(\S.*)$", _run(["dmidecode", "--type", "memory"])):
+        factors["memory_modules"] = _multi_instance(serials)
+
+    nic_identities = []
+    for device_path in sorted(glob.glob("/sys/class/net/*/device")):
+        if value := _read(os.path.join(os.path.dirname(device_path), "perm_address")):
+            if value != "00:00:00:00:00:00":
+                nic_identities.append(value)
+    if value := _multi_instance(nic_identities):
+        factors["nic_identity"] = value
+
+    batteries = []
+    for battery_path in sorted(glob.glob("/sys/class/power_supply/BAT*/serial_number")):
+        if value := _read(battery_path):
+            batteries.append(value)
+    if value := _multi_instance(batteries):
+        factors["battery_serial"] = value
+
+    for path in ("/sys/class/tpm/tpm0/device/ek_pub", "/sys/class/tpm/tpm0/ek_pub"):
+        if value := _read(path, binary=True):
+            factors["tpm_ek"] = hashlib.sha256(value).hexdigest()
+            break
 
     try:
         os_release = open("/etc/os-release", encoding="utf-8").read()

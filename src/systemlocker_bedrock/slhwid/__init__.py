@@ -28,9 +28,12 @@ from .core import (
     SLSTORE_PREFIX,
     build_shares,
     check_word,
+    CURRENT_NORM_VERSION,
     hwid_of,
+    map_mandatory_to_current,
     normalize_factors,
     parse_helper,
+    project_factors,
     recover_core,
     refresh_core,
     serialize_helper,
@@ -156,7 +159,7 @@ def _prepare_with(options: Options, collect, source, store) -> Session:
             raise SsError(f"slhwid: invalid extra mandatory slot name {name!r}")
         mandatory.add(name)
 
-    factors = normalize_factors(collect())
+    raw_factors = normalize_factors(collect())
 
     if store is None:
         from ._store import default_store
@@ -164,27 +167,29 @@ def _prepare_with(options: Options, collect, source, store) -> Session:
         store = default_store(options.store_path)
     hid = _DEVICE_HELPER_ID
     with _store_lock(store):
-        return _prepare_locked(options, source, store, factors, mandatory, hid)
+        return _prepare_locked(options, source, store, raw_factors, mandatory, hid)
 
 
-def _prepare_locked(options: Options, source, store, factors: dict[str, str],
-                    mandatory: set[str], hid: str) -> Session:
+def _prepare_locked(options: Options, source, store, raw_factors: dict[str, str],
+                    requested_mandatory: set[str], hid: str) -> Session:
     blob, found = store.read_helper(hid)
 
     # The slstore factor is ours, not collectable hardware: recovery injects
     # the persisted value (read-only). An absent value with an existing
     # helper is intentional tampering and recover_core reports it as a
     # hard-locked mandatory failure below.
-    if found and not options.force_reenroll and not factors.get("slstore"):
+    if found and not options.force_reenroll and not raw_factors.get("slstore"):
         value = store.read_slstore()
         if value is not None:
             if len(value) != 32:
                 raise CorruptHelperError("slhwid: store secret has the wrong size")
-            factors["slstore"] = value.hex()
+            raw_factors["slstore"] = value.hex()
 
     if not found or options.force_reenroll:
-        if not factors.get("slstore"):
-            factors["slstore"] = _ensure_slstore(store, source)
+        if not raw_factors.get("slstore"):
+            raw_factors["slstore"] = _ensure_slstore(store, source)
+        factors = project_factors(raw_factors, CURRENT_NORM_VERSION)
+        mandatory = map_mandatory_to_current(requested_mandatory)
         for name in sorted(mandatory):
             if not factors.get(name):
                 raise SsError(f"slhwid: mandatory factor {name!r} is not available on this machine")
@@ -205,7 +210,12 @@ def _prepare_locked(options: Options, source, store, factors: dict[str, str],
         session._expected_helper = bytes(blob)
         return session
 
-    result = recover_core(blob, factors)
+    try:
+        helper = parse_helper(blob)
+    except CorruptHelperError:
+        raise CorruptHelperError("slhwid: stored helper data is corrupt; re-enroll to recover") from None
+    recovery_factors = project_factors(raw_factors, helper.norm_version)
+    result = recover_core(blob, recovery_factors)
     if not result.ok:
         if result.reason == "corrupt":
             raise CorruptHelperError("slhwid: stored helper data is corrupt; re-enroll to recover")
@@ -213,10 +223,12 @@ def _prepare_locked(options: Options, source, store, factors: dict[str, str],
     session = Session(result.hwid, False, result.dead, result.pending)
     session._key = result.key
     session._draw = Draw(source)
-    session._factors = factors
+    # A recovered v1 helper is deliberately re-shared as v2 only on Commit,
+    # after authentication accepted its unchanged HWID.
+    session._factors = project_factors(raw_factors, CURRENT_NORM_VERSION)
     # Do not let one application weaken hard locks selected by the application
     # that enrolled the shared device helper.
-    session._mandatory = {slot.name for slot in parse_helper(blob).slots if slot.mandatory}
+    session._mandatory = map_mandatory_to_current(slot.name for slot in helper.slots if slot.mandatory)
     session._store = store
     session._expected_helper = bytes(blob)
     return session

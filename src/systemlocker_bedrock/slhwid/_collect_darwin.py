@@ -39,6 +39,7 @@ def collect() -> dict[str, str]:
         factors["machine_guid"] = value
     if value := _first(r'"IOPlatformSerialNumber"\s*=\s*"([^"]+)"', expert):
         factors["board_serial"] = value
+        factors["system_serial"] = value
 
     brand = _run(["sysctl", "-n", "machdep.cpu.brand_string"]).strip()
     if not brand:
@@ -49,6 +50,8 @@ def collect() -> dict[str, str]:
 
     if value := _first(r"ether\s+([0-9a-fA-F:]{17})", _run(["ifconfig", "en0"])):
         factors["mac"] = value
+    if values := _all(r"Ethernet Address:\s*([0-9a-fA-F:]{17})", _run(["networksetup", "-listallhardwareports"])):
+        factors["nic_identity"] = "|".join(sorted(values))
 
     if total := _run(["sysctl", "-n", "hw.memsize"]).strip():
         factors["ram_total"] = total
@@ -66,6 +69,16 @@ def collect() -> dict[str, str]:
     hardware = _run(["system_profiler", "SPHardwareDataType", "-json"], timeout=5.0)
     if value := _first(r'"spmachine_bootrom_version"\s*:\s*"([^"]+)"', hardware):
         factors["firmware"] = value
+
+    memory = _run(["system_profiler", "SPMemoryDataType", "-json"], timeout=5.0)
+    if serials := _all(r'"[^"]*serial[^"]*"\s*:\s*"([^"]+)"', memory):
+        factors["memory_modules"] = "|".join(sorted(serials))
+
+    battery = _run(["ioreg", "-r", "-c", "AppleSmartBattery"])
+    if value := _first(r'"BatterySerialNumber"\s*=\s*"([^"]+)"', battery):
+        factors["battery_serial"] = value
+    elif value := _first(r'"Serial"\s*=\s*"?([^"\n]+)"?', battery):
+        factors["battery_serial"] = value
 
     displays = _run(["system_profiler", "SPDisplaysDataType", "-json"], timeout=5.0)
     if models := _all(r'"spdisplays_model"\s*:\s*"([^"]+)"', displays):

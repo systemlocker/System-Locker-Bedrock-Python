@@ -16,6 +16,14 @@ from itertools import combinations
 
 P = (1 << 61) - 1
 
+LEGACY_NORM_VERSION = 1
+CURRENT_NORM_VERSION = 2
+
+# A conservative physical-machine floor is nine current-schema slots;
+# requiring one fewer tolerates one unavailable collector. Revisit this when
+# the projection tables below change.
+MINIMUM_FACTORS = 8
+
 HELPER_MAGIC = b"SLSSHWID"
 SLSTORE_PREFIX = b"SLSTOR1"
 
@@ -142,11 +150,13 @@ def ct_equal(a: bytes, b: bytes) -> bool:
 
 
 def threshold(n: int, m: int) -> int:
-    if n < 5:
-        raise SsError(f"slhwid: need at least 5 enrolled factors, have {n}")
+    if n < MINIMUM_FACTORS:
+        raise SsError(f"slhwid: need at least {MINIMUM_FACTORS} enrolled factor slots, have {n}")
     if m >= n:
         raise SsError(f"slhwid: mandatory slots ({m}) must be fewer than total ({n})")
-    num, den = (4, 5) if n > 10 else (7, 10)  # 80% above ten factors, else 70%
+    # Current enrollment cannot reach the first branch, but keeping the full
+    # policy explicit makes the boundary and legacy rationale unambiguous.
+    num, den = (4, 5) if n < 8 else (7, 10)
     t = (num * n + den - 1) // den
     return max(m + 1, min(t, n))
 
@@ -166,7 +176,7 @@ _PLACEHOLDERS = {
 
 def normalize(name: str, raw: str) -> str:
     value = raw.replace("\x00", "").strip().lower()
-    if name == "mac":
+    if name in ("mac", "nic_identity"):
         value = value.replace(":", "").replace("-", "")
     return value
 
@@ -182,6 +192,75 @@ def normalize_factors(raw: dict[str, str]) -> dict[str, str]:
         if nv and not is_missing(nv):
             out[name] = nv
     return out
+
+
+_LEGACY_FACTOR_NAMES = (
+    "slstore", "machine_guid", "product_uuid", "board_serial", "cpu_id", "disk_serial", "mac",
+    "ram_total", "volume_id", "computer_name", "firmware", "gpu_id", "monitor_edid", "os_build",
+)
+
+_CURRENT_DIRECT_FACTOR_NAMES = (
+    "slstore", "machine_guid", "cpu_id", "disk_serial", "ram_total", "volume_id", "firmware",
+    "tpm_ek", "memory_modules", "nic_identity", "battery_serial",
+)
+
+_CURRENT_FACTOR_GROUPS = (
+    ("platform_identity", ("system_uuid", "board_serial", "system_serial", "chassis_serial")),
+    ("display_group", ("gpu_id", "monitor_edid")),
+    ("software_environment", ("computer_name", "os_build")),
+)
+
+
+def _group_value(name: str, members: tuple[str, ...], raw: dict[str, str]) -> str:
+    """Return one capped recovery value for correlated raw signals.
+
+    Empty members are intentionally encoded. A partial group therefore has a
+    stable, distinct value and any member change invalidates the one group
+    vote without turning one physical failure domain into several votes.
+    """
+    encoded = bytearray(b"SL-HWID-GROUP2\x00")
+    encoded += name.encode("ascii") + b"\x00"
+    present = False
+    for member in members:
+        value = raw.get(member, "")
+        present |= bool(value)
+        encoded += member.encode("ascii") + b"\x00"
+        encoded += value.encode("utf-8") + b"\x00"
+    return hashlib.sha256(encoded).hexdigest() if present else ""
+
+
+def project_factors(raw: dict[str, str], norm_version: int) -> dict[str, str]:
+    """Project normalized raw signals into the helper's factor schema.
+
+    Keep the v1 projection frozen: existing helpers derive their x-values
+    from these historical slot names and values. New helpers always use v2.
+    """
+    if norm_version == LEGACY_NORM_VERSION:
+        return {name: raw[name] for name in _LEGACY_FACTOR_NAMES if raw.get(name)}
+    if norm_version != CURRENT_NORM_VERSION:
+        raise SsError(f"slhwid: unsupported factor schema {norm_version}")
+    out = {name: raw[name] for name in _CURRENT_DIRECT_FACTOR_NAMES if raw.get(name)}
+    for name, members in _CURRENT_FACTOR_GROUPS:
+        value = _group_value(name, members, raw)
+        if value:
+            out[name] = value
+    return out
+
+
+def current_mandatory_name(name: str) -> str:
+    if name in ("product_uuid", "board_serial", "system_uuid", "system_serial", "chassis_serial"):
+        return "platform_identity"
+    if name in ("gpu_id", "monitor_edid"):
+        return "display_group"
+    if name in ("computer_name", "os_build"):
+        return "software_environment"
+    if name == "mac":
+        return "nic_identity"
+    return name
+
+
+def map_mandatory_to_current(names) -> set[str]:
+    return {current_mandatory_name(name) for name in names}
 
 
 # ── sharing ─────────────────────────────────────────────────────────
@@ -220,10 +299,11 @@ def build_shares(k, slots, t: int, d: Draw):
 # ── helper blob ─────────────────────────────────────────────────────
 
 
-def serialize_helper(shares, mandatory: set[str], t: int, salt: int, cw: bytes) -> bytes:
+def serialize_helper(shares, mandatory: set[str], t: int, salt: int, cw: bytes,
+                     norm_version: int = CURRENT_NORM_VERSION) -> bytes:
     names = sorted(shares)
     payload = bytearray()
-    payload += bytes([1, 1, salt, len(names)])
+    payload += bytes([1, norm_version, salt, len(names)])
     payload += bytes([sum(1 for n in names if n in mandatory), t, 0, 0])
     for name in names:
         encoded = name.encode("ascii")
@@ -249,9 +329,10 @@ class HelperSlot:
 
 
 class Helper:
-    __slots__ = ("salt", "threshold", "slots", "check_word")
+    __slots__ = ("norm_version", "salt", "threshold", "slots", "check_word")
 
-    def __init__(self, salt: int, threshold_: int, slots: list[HelperSlot], check_word: bytes) -> None:
+    def __init__(self, norm_version: int, salt: int, threshold_: int, slots: list[HelperSlot], check_word: bytes) -> None:
+        self.norm_version = norm_version
         self.salt = salt
         self.threshold = threshold_
         self.slots = slots
@@ -273,8 +354,10 @@ def parse_helper(blob: bytes) -> Helper:
     cw = blob[12 + payload_len : 12 + payload_len + 32]
     if body[0] != 1:
         raise corrupt(f"slhwid: stored helper data is corrupt: unsupported version {body[0]}")
+    if body[1] not in (LEGACY_NORM_VERSION, CURRENT_NORM_VERSION):
+        raise corrupt(f"slhwid: stored helper data is corrupt: unsupported factor schema {body[1]}")
     n = body[3]
-    helper = Helper(body[2], body[5], [], cw)
+    helper = Helper(body[1], body[2], body[5], [], cw)
     rest = body[8:]
     seen: set[str] = set()
     for _ in range(n):
@@ -471,6 +554,11 @@ def recover_core(blob: bytes, factors: dict[str, str]) -> RecoverResult:
 
 def refresh_core(k, factors: dict[str, str], mandatory: set[str], d: Draw):
     """Re-shares k over the current factors; returns (blob, written)."""
+    # This matters during v1 -> v2 migration: a legacy mandatory name may map
+    # to a current group that is unavailable. Skipping the write preserves the
+    # old hard lock instead of silently dropping it from the new helper.
+    if any(not factors.get(name) for name in mandatory):
+        return None, False
     slots = slot_list(factors, mandatory)
     m = sum(1 for s in slots if s[2])
     try:

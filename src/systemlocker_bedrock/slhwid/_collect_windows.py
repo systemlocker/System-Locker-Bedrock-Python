@@ -97,6 +97,34 @@ def _multi_instance(values: list[str]) -> str:
     return "|".join(cleaned)
 
 
+def _schema_v2_factors() -> dict[str, str]:
+    """Collect optional SMBIOS/peripheral identities through CIM.
+
+    WMIC is deprecated, so the v2-only data deliberately uses PowerShell's
+    CIM cmdlets. A missing cmdlet, permission, or device simply omits the
+    signal; collectors must never turn an optional identity into a failure.
+    """
+    script = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        "function Emit($n,$v){$c=@($v|?{$_ -ne $null -and ([string]$_).Trim().Length -gt 0}|"
+        "%{([string]$_).Trim()}|sort);if($c.Count -gt 0){Write-Output ($n+'='+($c -join '|'))}};"
+        "$p=Get-CimInstance Win32_ComputerSystemProduct;Emit 'system_uuid' $p.UUID;"
+        "Emit 'system_serial' $p.IdentifyingNumber;"
+        "Emit 'chassis_serial' (Get-CimInstance Win32_SystemEnclosure).SerialNumber;"
+        "Emit 'disk_serial' (Get-CimInstance Win32_DiskDrive).SerialNumber;"
+        "Emit 'memory_modules' (Get-CimInstance Win32_PhysicalMemory).SerialNumber;"
+        "Emit 'nic_identity' (Get-CimInstance Win32_NetworkAdapter|?{$_.PhysicalAdapter}).PermanentAddress;"
+        "Emit 'battery_serial' (Get-CimInstance -Namespace root/wmi -ClassName BatteryStaticData).SerialNumber;"
+        "$ek=Get-TpmEndorsementKeyInfo -HashAlgorithm Sha256;if($ek.IsPresent){Emit 'tpm_ek' $ek.PublicKeyHash}"
+    )
+    factors: dict[str, str] = {}
+    for line in _run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], 12.0).splitlines():
+        name, separator, value = line.partition("=")
+        if separator and name and value:
+            factors[name] = value
+    return factors
+
+
 def collect() -> dict[str, str]:
     factors: dict[str, str] = {}
 
@@ -173,5 +201,12 @@ def collect() -> dict[str, str]:
 
     if mac := _mac_address():
         factors["mac"] = mac
+
+    # Keep v1 collection above unchanged. These are raw signals for the v2
+    # projector and still leave the legacy names available for v1 recovery.
+    for name, value in _schema_v2_factors().items():
+        # A v1 helper's disk serial must retain the legacy collector's exact
+        # value. New-only signals can be added without changing that view.
+        factors.setdefault(name, value)
 
     return factors
