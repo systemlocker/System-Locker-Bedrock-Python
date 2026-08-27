@@ -28,7 +28,7 @@ class Config:
     max_server_clock_skew_seconds: int = 120
     base_url: str = "https://systemlocker.net"
     invisible_folder_base_url: str = "https://invisiblefolder.net"
-    user_agent: str = "systemlocker-bedrock-python/1.0"
+    user_agent: str = "systemlocker-bedrock-python/1.0.0"
     program_digest: str | None = None
     signing_key_id: str | None = None
     invisible_folder_api_key: str | None = None

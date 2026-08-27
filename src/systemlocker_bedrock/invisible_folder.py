@@ -95,8 +95,14 @@ class InvisibleFolder:
                 "No Invisible Folder token is available. Request one during initialization or a heartbeat.",
             )
 
+        # The download route is a plain GET; credentials travel in headers
+        # because GET request bodies are not supported.
         url = self._client.endpoint(self._client.config.invisible_folder_base_url, DOWNLOAD_PREFIX) + reference_id
-        response = self._client.http.post_form(url, {"invisiblefolder_token": token}, {})
+        headers = {
+            "X-Invisiblefolder-Download": "1",
+            "X-Invisiblefolder-Token": token,
+        }
+        response = self._client.http.get(url, headers)
         return self._handle_download_response(response, "download")
 
     def download_to_file(self, reference_id: str, destination: str | Path) -> Path:
