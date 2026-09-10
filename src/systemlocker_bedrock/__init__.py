@@ -20,7 +20,7 @@ from .verify import (
     verify_signed_response,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "AuthenticationResult",
